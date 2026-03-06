@@ -1,0 +1,7 @@
+{
+  "name": "Controlador Aéreo Pro: México",
+  "description": "Simulador de control de tráfico aéreo realista (ATC) en aeropuertos mexicanos. Gestiona llegadas, evita colisiones y autoriza aterrizajes utilizando datos generados por IA.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
