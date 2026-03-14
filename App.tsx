@@ -968,12 +968,16 @@ const App: React.FC = () => {
           lastSpawnTime.current = Date.now();
           nextSpawnDelay.current = gameState.level!.spawnRate + (Math.random() * 5000);
       }
+
+      // Process game events and progression outside of aircraft state update
+      const currentActivePlanes = aircraftRef.current.filter(p => p.status !== FlightStatus.LANDED && p.status !== FlightStatus.CRASHED);
+      checkForLevelProgression(scoreRef.current);
+      processGameEvents(tickCount.current, currentActivePlanes);
+
       setAircraft(prevAircraft => {
         let highestAlert: 'NONE' | 'WARNING' | 'CRITICAL' = 'NONE';
         const activePlanes = prevAircraft.filter(p => p.status !== FlightStatus.LANDED && p.status !== FlightStatus.CRASHED);
         let tutorialJustCompleted = false;
-        checkForLevelProgression(scoreRef.current);
-        processGameEvents(tickCount.current, activePlanes);
         
         const alertMap = new Map<string, 'NONE' | 'WARNING' | 'CRITICAL'>();
         prevAircraft.forEach(p => alertMap.set(p.id, 'NONE'));
@@ -1122,7 +1126,7 @@ const App: React.FC = () => {
             let newHistory = plane.history;
             if (tickCount.current % TRAIL_UPDATE_TICKS === 0) {
                 newHistory = [...plane.history, plane.position];
-                if (newHistory.length > 500) newHistory.shift(); 
+                if (newHistory.length > 100) newHistory.shift(); 
             }
 
             let newStatus: FlightStatus = plane.status;
@@ -1199,7 +1203,7 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [gameState.isPlaying, gameState.level, gameState.isGameOver, gameState.tutorialCompleted]);
   
-  const activeAircraft = aircraft.find(a => a.id === selectedAircraftId) || null;
+  const activeAircraft = React.useMemo(() => aircraft.find(a => a.id === selectedAircraftId) || null, [aircraft, selectedAircraftId]);
   return (
     <div className="h-[100dvh] w-screen bg-slate-950 flex flex-col overflow-hidden text-slate-100 font-mono">
       <div className="absolute top-0 left-0 p-4 z-50 pointer-events-none w-full flex justify-between">

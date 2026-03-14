@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Aircraft, Airport, FlightStatus, PendingUpdates, Coordinates } from '../types';
 
 interface RadarScreenProps {
@@ -18,6 +18,71 @@ interface RadarScreenProps {
 const TURN_RATE_PER_TICK = 0.60; 
 const SIM_SPEED_FACTOR = 1.0; 
 
+interface PlaneMarkerProps {
+  plane: Aircraft;
+  isSelected: boolean;
+  project: (lat: number, lon: number) => { x: number, y: number };
+  onSelect: (id: string) => void;
+  onStartDrag: (e: React.MouseEvent | React.TouchEvent, id: string, pos: {x: number, y: number}) => void;
+  pendingUpdates: PendingUpdates | null;
+  score: number;
+  runwayHeading: number;
+}
+
+const PlaneMarker = React.memo(({ 
+  plane, 
+  isSelected, 
+  project, 
+  onSelect, 
+  onStartDrag, 
+  pendingUpdates, 
+  score,
+  runwayHeading 
+}: PlaneMarkerProps) => {
+  const pos = project(plane.position.lat, plane.position.lon);
+  const isEmergency = plane.status === FlightStatus.LOST_SEPARATION || plane.proximityAlert === 'CRITICAL';
+  const isWarning = plane.proximityAlert === 'WARNING';
+  const isOnILS = plane.establishedOnILS;
+  const hasSquawk7700 = plane.squawk === '7700';
+  let navLabel = null;
+  let navColor = "text-emerald-400";
+
+  if (hasSquawk7700) { navLabel = "SQ 7700"; navColor = "text-red-500 animate-pulse"; } 
+  else if (plane.squawk === '7600') { navLabel = "SQ 7600"; navColor = "text-orange-500 animate-pulse"; } 
+  else if (isSelected && pendingUpdates?.directTo) { navLabel = `→${pendingUpdates.directTo}`; navColor = "text-yellow-400"; } 
+  else if (plane.currentDirectTo && !plane.clearedForILS) { navLabel = `→${plane.currentDirectTo}`; navColor = "text-orange-400"; } 
+  else if (isOnILS) { navLabel = `LOC LOCK`; navColor = "text-cyan-400"; } 
+  else if (plane.clearedForILS) { navLabel = `ILS ARM`; navColor = "text-blue-400"; } 
+  else { navLabel = `H ${Math.round(plane.heading).toString().padStart(3,'0')}`; navColor = "text-slate-400"; }
+
+  if (pos.x < -100 || pos.y < -100 || pos.x > window.innerWidth + 100 || pos.y > window.innerHeight + 100) return null;
+
+  return (
+    <div 
+      onMouseDown={(e) => onStartDrag(e, plane.id, pos)} 
+      onTouchStart={(e) => onStartDrag(e, plane.id, pos)} 
+      onClick={(e) => { e.stopPropagation(); onSelect(plane.id); }} 
+      className="absolute cursor-pointer group pointer-events-auto flex items-center justify-center w-0 h-0" 
+      style={{ left: pos.x, top: pos.y }}
+    >
+      <div className="absolute w-12 h-12 bg-transparent z-10" />
+      {plane.tutorialHint && score < 10 && (
+          <div className="absolute -top-16 left-8 bg-blue-600 text-white text-[12px] font-bold px-3 py-2 rounded shadow-xl whitespace-nowrap z-50 animate-bounce border-2 border-white">{plane.tutorialHint}<div className="absolute top-full left-0 w-0 h-0 border-t-[8px] border-t-white border-r-[8px] border-r-transparent"></div></div>
+      )}
+      <div className={`absolute w-1.5 h-1.5 rounded-sm z-20 ${hasSquawk7700 ? 'bg-red-500 animate-ping' : plane.squawk === '7600' ? 'bg-orange-500' : isEmergency ? 'bg-red-500 animate-pulse' : 'bg-emerald-400'}`} />
+      {isWarning && (<div className="absolute w-8 h-8 border border-orange-500 rounded-full animate-pulse opacity-80 z-10 shadow-[0_0_10px_rgba(249,115,22,0.6)]" />)}
+      {isEmergency && (<div className="absolute w-12 h-12 border-2 border-red-600 rounded-full animate-ping opacity-100 z-10" />)}
+      {isSelected && (<><div className="absolute w-5 h-5 border border-emerald-300 opacity-80 z-10" /><div className="absolute w-9 h-9 border border-yellow-400 rounded-full opacity-100 z-10 animate-pulse shadow-[0_0_10px_rgba(250,204,21,0.5)]" /></>)}
+      <div className={`absolute top-0 left-0 h-[1px] origin-left pointer-events-none ${isSelected ? 'w-[60px] bg-white opacity-80' : 'w-[30px] bg-emerald-500/50'}`} style={{ transform: `rotate(${plane.heading - 90}deg)` }} />
+      <div className={`absolute left-4 -top-4 text-[11px] font-mono leading-none whitespace-nowrap pointer-events-none select-none z-30 ${isEmergency || hasSquawk7700 ? 'text-red-500 font-bold' : isWarning ? 'text-orange-400 font-bold' : 'text-[#4ade80] drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]'}`}>
+          <div className="font-bold mb-0.5">{plane.callsign}</div>
+          <div className="flex gap-2"><span>{Math.floor(plane.altitude / 100).toString().padStart(3,'0')}{plane.targetAltitude !== plane.altitude && (<span className="text-[9px] align-top text-emerald-200">{plane.targetAltitude > plane.altitude ? '↑' : '↓'}</span>)}</span><span>{Math.floor(plane.speed / 10).toString().padStart(2,'0')}</span></div>
+          <div className={`font-bold ${isEmergency || hasSquawk7700 ? 'text-red-500' : isWarning ? 'text-orange-400' : navColor}`}>{navLabel}</div>
+      </div>
+    </div>
+  );
+});
+
 const RadarScreen: React.FC<RadarScreenProps> = ({ 
   aircraft, 
   airport, 
@@ -30,7 +95,6 @@ const RadarScreen: React.FC<RadarScreenProps> = ({
   gameTier,
   ashCloud
 }) => {
-  const [sweepAngle, setSweepAngle] = useState(0);
   const [mapOpacity, setMapOpacity] = useState(0.4);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -366,33 +430,32 @@ const RadarScreen: React.FC<RadarScreenProps> = ({
       return window.L.divIcon({
           className: 'bg-transparent border-none',
           html: `
-            <div class="relative flex flex-col items-center justify-center transition-all duration-200 ${isSnapped ? 'scale-125 z-50' : ''}">
-                ${isSnapped ? '<div class="absolute w-12 h-12 rounded-full border-2 border-cyan-400 animate-pulse bg-cyan-900/30 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"></div>' : ''}
-                ${wp.type === 'VOR' ? 
-                    `<svg width="18" height="18" viewBox="0 0 24 24" class="${isSnapped ? 'text-cyan-400' : 'text-slate-400'} stroke-current stroke-[2px] fill-slate-900/50"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z" /><circle cx="12" cy="12" r="2" class="fill-current" /></svg>` : 
-                 wp.type === 'FIX' ? 
-                    `<svg width="10" height="10" viewBox="0 0 24 24" class="${isSnapped ? 'text-cyan-400' : 'text-slate-600'} fill-current opacity-80"><path d="M12 4L4 20h16z" /></svg>` :
-                    `<div class="w-4 h-4 border-2 border-slate-300 bg-slate-900/30"></div>`
-                }
-                <div class="mt-1 text-[10px] font-mono font-bold whitespace-nowrap tracking-wider drop-shadow-md ${isSnapped ? 'text-cyan-300 scale-110' : 'text-slate-400'}">${wp.name}</div>
+            <div class="relative w-9 h-9 transition-all duration-200 ${isSnapped ? 'scale-110 z-50' : ''}">
+                <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    ${isSnapped ? '<div class="absolute w-11 h-11 rounded-full border-2 border-cyan-400 animate-pulse bg-cyan-900/30"></div>' : ''}
+                    <div class="relative flex items-center justify-center">
+                        ${wp.type === 'VOR' ? 
+                            `<svg width="16" height="16" viewBox="0 0 24 24" class="${isSnapped ? 'text-cyan-400' : 'text-slate-400'} stroke-current stroke-[2px] fill-slate-900/50"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z" /><circle cx="12" cy="12" r="2" class="fill-current" /></svg>` : 
+                         wp.type === 'FIX' ? 
+                            `<svg width="10" height="10" viewBox="0 0 24 24" class="${isSnapped ? 'text-cyan-400' : 'text-slate-600'} fill-current opacity-80"><path d="M12 4L4 20h16z" /></svg>` :
+                            `<div class="w-4 h-4 border-2 border-slate-300 bg-slate-900/30"></div>`
+                        }
+                    </div>
+                </div>
+                <div class="absolute top-full left-1/2 -translate-x-1/2 mt-1 text-[9px] font-mono font-bold whitespace-nowrap tracking-wider drop-shadow-md ${isSnapped ? 'text-cyan-300 scale-105' : 'text-slate-400'}">${wp.name}</div>
             </div>
           `,
-          iconSize: [40, 40],
-          iconAnchor: [20, 20] 
+          iconSize: [36, 36],
+          iconAnchor: [18, 18] 
       });
   };
 
-  useEffect(() => {
-    const interval = setInterval(() => { setSweepAngle((prev) => (prev + 1.5) % 360); }, 20);
-    return () => clearInterval(interval);
-  }, []);
-
-  const project = (lat: number, lon: number) => {
+  const project = useCallback((lat: number, lon: number) => {
       if (!mapInstanceRef.current) return { x: 0, y: 0 };
       // @ts-ignore
       const point = mapInstanceRef.current.latLngToContainerPoint([lat, lon]);
       return { x: point.x, y: point.y };
-  };
+  }, [projectionVersion]);
 
   useEffect(() => {
       const handleGlobalMove = (e: MouseEvent | TouchEvent) => {
@@ -448,8 +511,6 @@ const RadarScreen: React.FC<RadarScreenProps> = ({
       }
   }, [isDragging, dragStartPos, onRadarInteraction, airport.waypoints]);
 
-  const centerPos = project(airport.location.lat, airport.location.lon);
-
   const handlePlaneStart = (e: React.MouseEvent | React.TouchEvent, planeId: string, pos: {x: number, y: number}) => {
       e.stopPropagation(); 
       onSelectAircraft(planeId);
@@ -494,24 +555,27 @@ const RadarScreen: React.FC<RadarScreenProps> = ({
     return points.join(' ');
   };
 
-  let directToLineCoords = null;
-  let curvedPathPoints = null;
+  const curvedPathPoints = React.useMemo(() => {
+    if (!selectedPlane) return null;
+    if (pendingUpdates?.directTo) return null;
+    
+    const targetH = isDragging && dragHeading !== null ? dragHeading : (pendingUpdates?.heading !== null ? pendingUpdates?.heading : null);
+    if (targetH !== null && Math.abs(targetH - selectedPlane.heading) > 1) {
+        return calculatePath(selectedPlane.position.lat, selectedPlane.position.lon, selectedPlane.heading, targetH, selectedPlane.speed);
+    }
+    return null;
+  }, [selectedPlane?.id, selectedPlane?.position, selectedPlane?.heading, selectedPlane?.speed, pendingUpdates?.heading, pendingUpdates?.directTo, isDragging, dragHeading, projectionVersion]);
 
-  if (selectedPlane) {
-      if (pendingUpdates?.directTo) {
-        const wp = airport.waypoints.find(w => w.name === pendingUpdates.directTo);
-        if (wp) {
-            const start = project(selectedPlane.position.lat, selectedPlane.position.lon);
-            const end = project(wp.location.lat, wp.location.lon);
-            directToLineCoords = { start, end };
-        }
-      } else if (pendingUpdates?.heading !== null || (isDragging && dragHeading !== null)) {
-        const targetH = isDragging && dragHeading !== null ? dragHeading : (pendingUpdates?.heading !== null ? pendingUpdates.heading : null);
-        if (targetH !== null && Math.abs(targetH - selectedPlane.heading) > 1) {
-            curvedPathPoints = calculatePath(selectedPlane.position.lat, selectedPlane.position.lon, selectedPlane.heading, targetH, selectedPlane.speed);
-        }
-      }
-  }
+  const directToLineCoords = React.useMemo(() => {
+    if (!selectedPlane || !pendingUpdates?.directTo) return null;
+    const wp = airport.waypoints.find(w => w.name === pendingUpdates.directTo);
+    if (!wp) return null;
+    const start = project(selectedPlane.position.lat, selectedPlane.position.lon);
+    const end = project(wp.location.lat, wp.location.lon);
+    return { start, end };
+  }, [selectedPlane?.id, selectedPlane?.position, pendingUpdates?.directTo, airport.waypoints, projectionVersion]);
+
+  const centerPos = project(airport.location.lat, airport.location.lon);
 
   return (
     <div className="relative w-full h-full bg-black overflow-hidden shadow-2xl rounded-lg border border-slate-800 cursor-crosshair touch-none">
@@ -545,54 +609,32 @@ const RadarScreen: React.FC<RadarScreenProps> = ({
       <div className="absolute inset-0 z-30 pointer-events-none">
           {aircraft.map((plane) => {
             if (plane.status === FlightStatus.LANDED || plane.status === FlightStatus.CRASHED) return null;
-            const pos = project(plane.position.lat, plane.position.lon);
             const isSelected = plane.id === selectedAircraftId;
-            const isEmergency = plane.status === FlightStatus.LOST_SEPARATION || plane.proximityAlert === 'CRITICAL';
-            const isWarning = plane.proximityAlert === 'WARNING';
-            const isOnILS = plane.establishedOnILS;
-            const hasSquawk7700 = plane.squawk === '7700';
-            let navLabel = null;
-            let navColor = "text-emerald-400";
-
-            if (hasSquawk7700) { navLabel = "SQ 7700"; navColor = "text-red-500 animate-pulse"; } 
-            else if (plane.squawk === '7600') { navLabel = "SQ 7600"; navColor = "text-orange-500 animate-pulse"; } 
-            else if (isSelected && pendingUpdates?.directTo) { navLabel = `→${pendingUpdates.directTo}`; navColor = "text-yellow-400"; } 
-            else if (plane.currentDirectTo && !plane.clearedForILS) { navLabel = `→${plane.currentDirectTo}`; navColor = "text-orange-400"; } 
-            else if (isOnILS) { navLabel = `LOC LOCK`; navColor = "text-cyan-400"; } 
-            else if (plane.clearedForILS) { navLabel = `ILS ARM`; navColor = "text-blue-400"; } 
-            else { navLabel = `H ${Math.round(plane.heading).toString().padStart(3,'0')}`; navColor = "text-slate-400"; }
-
-            if (pos.x < -100 || pos.y < -100 || pos.x > window.innerWidth + 100 || pos.y > window.innerHeight + 100) return null;
-
+            const pos = project(plane.position.lat, plane.position.lon);
+            
             return (
               <React.Fragment key={plane.id}>
                 {isSelected && plane.history && plane.history.map((histPos, idx) => {
                     const hPos = project(histPos.lat, histPos.lon);
                     return (<div key={idx} className="absolute w-[2px] h-[2px] bg-emerald-500/40 rounded-full pointer-events-none" style={{ left: hPos.x, top: hPos.y }} />);
                 })}
-                <div onMouseDown={(e) => handlePlaneStart(e, plane.id, pos)} onTouchStart={(e) => handlePlaneStart(e, plane.id, pos)} onClick={(e) => { e.stopPropagation(); }} className="absolute cursor-pointer group pointer-events-auto" style={{ left: pos.x, top: pos.y }}>
-                    <div className="absolute w-12 h-12 -translate-x-1/2 -translate-y-1/2 bg-transparent z-10" />
-                    {plane.tutorialHint && score < 10 && (
-                        <div className="absolute -top-16 left-8 bg-blue-600 text-white text-[12px] font-bold px-3 py-2 rounded shadow-xl whitespace-nowrap z-50 animate-bounce border-2 border-white">{plane.tutorialHint}<div className="absolute top-full left-0 w-0 h-0 border-t-[8px] border-t-white border-r-[8px] border-r-transparent"></div></div>
-                    )}
-                    <div className={`absolute w-1.5 h-1.5 -translate-x-1/2 -translate-y-1/2 rounded-sm z-20 ${hasSquawk7700 ? 'bg-red-500 animate-ping' : plane.squawk === '7600' ? 'bg-orange-500' : isEmergency ? 'bg-red-500 animate-pulse' : 'bg-emerald-400'}`} />
-                    {isWarning && (<div className="absolute w-12 h-12 -translate-x-1/2 -translate-y-1/2 border border-orange-500 rounded-full animate-pulse opacity-80 z-10 shadow-[0_0_10px_rgba(249,115,22,0.6)]" />)}
-                    {isEmergency && (<div className="absolute w-16 h-16 -translate-x-1/2 -translate-y-1/2 border-2 border-red-600 rounded-full animate-ping opacity-100 z-10" />)}
-                    {isSelected && (<><div className="absolute w-6 h-6 -translate-x-1/2 -translate-y-1/2 border border-emerald-300 opacity-80 z-10" /><div className="absolute w-10 h-10 -translate-x-1/2 -translate-y-1/2 border border-yellow-400 rounded-full opacity-100 z-10 animate-pulse shadow-[0_0_10px_rgba(250,204,21,0.5)]" /></>)}
-                    <div className={`absolute top-0 left-0 h-[1px] origin-left pointer-events-none ${isSelected ? 'w-[80px] bg-white opacity-80' : 'w-[40px] bg-emerald-500/50'}`} style={{ transform: `rotate(${plane.heading - 90}deg)` }} />
-                    <div className={`absolute left-3 -top-4 text-[11px] font-mono leading-none whitespace-nowrap pointer-events-none select-none z-30 ${isEmergency || hasSquawk7700 ? 'text-red-500 font-bold' : isWarning ? 'text-orange-400 font-bold' : 'text-[#4ade80] drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]'}`}>
-                        <div className="font-bold mb-0.5">{plane.callsign}</div>
-                        <div className="flex gap-2"><span>{Math.floor(plane.altitude / 100).toString().padStart(3,'0')}{plane.targetAltitude !== plane.altitude && (<span className="text-[9px] align-top text-emerald-200">{plane.targetAltitude > plane.altitude ? '↑' : '↓'}</span>)}</span><span>{Math.floor(plane.speed / 10).toString().padStart(2,'0')}</span></div>
-                        <div className={`font-bold ${isEmergency || hasSquawk7700 ? 'text-red-500' : isWarning ? 'text-orange-400' : navColor}`}>{navLabel}</div>
-                    </div>
-                </div>
+                <PlaneMarker 
+                  plane={plane}
+                  isSelected={isSelected}
+                  project={project}
+                  onSelect={onSelectAircraft}
+                  onStartDrag={handlePlaneStart}
+                  pendingUpdates={pendingUpdates}
+                  score={score}
+                  runwayHeading={airport.runwayHeading}
+                />
               </React.Fragment>
             );
           })}
       </div>
       
       <div className="absolute rounded-full pointer-events-none z-20" style={{ width: radarPixelRadius * 2, height: radarPixelRadius * 2, left: centerPos.x - radarPixelRadius, top: centerPos.y - radarPixelRadius, background: 'radial-gradient(circle, rgba(16,185,129,0) 0%, rgba(16,185,129,0.0) 40%, rgba(16,185,129,0.05) 60%, rgba(16,185,129,0) 70%)' }}>
-           <div className="absolute top-1/2 left-1/2 w-1/2 h-[2px] bg-gradient-to-r from-transparent via-emerald-500/20 to-emerald-500/80 origin-left" style={{ transform: `translate(0, -50%) rotate(${sweepAngle - 90}deg)`, boxShadow: "0 0 15px 1px rgba(16, 185, 129, 0.4)" }} />
+           <div className="absolute top-1/2 left-1/2 w-1/2 h-[2px] bg-gradient-to-r from-transparent via-emerald-500/20 to-emerald-500/80 origin-left animate-radar-sweep" style={{ transform: `translate(0, -50%)`, boxShadow: "0 0 15px 1px rgba(16, 185, 129, 0.4)" }} />
       </div>
     </div>
   );

@@ -45,6 +45,23 @@ const getSpokenCallsign = (callsign: string) => {
   return `${name} ${number}`;
 };
 
+interface RadioMessageItemProps {
+  msg: RadioMessage;
+}
+
+const RadioMessageItem = React.memo(({ msg }: RadioMessageItemProps) => (
+  <div className={`flex flex-col ${msg.sender === 'ATC' ? 'items-end' : 'items-start'} mb-1`}>
+    <div className={`px-2 py-1 rounded max-w-[90%] ${
+      msg.sender === 'ATC' ? 'bg-sky-900/40 text-sky-200 border border-sky-800' : 'bg-emerald-900/40 text-emerald-200 border border-emerald-800'
+    }`}>
+      <span className="font-bold mr-1 text-[10px] opacity-70 block">
+        {msg.sender === 'ATC' ? 'TWR' : msg.callsign}:
+      </span>
+      {msg.text}
+    </div>
+  </div>
+));
+
 const ControlPanel: React.FC<ControlPanelProps> = ({ 
   aircraft, 
   airport,
@@ -421,16 +438,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
             <div className="text-slate-600 italic text-center mt-4">Canal libre.</div>
           )}
           {radioHistory.map((msg) => (
-            <div key={msg.id} className={`flex flex-col ${msg.sender === 'ATC' ? 'items-end' : 'items-start'}`}>
-              <div className={`px-2 py-1 rounded max-w-[90%] ${
-                msg.sender === 'ATC' ? 'bg-sky-900/40 text-sky-200 border border-sky-800' : 'bg-emerald-900/40 text-emerald-200 border border-emerald-800'
-              }`}>
-                <span className="font-bold mr-1 text-[10px] opacity-70 block">
-                  {msg.sender === 'ATC' ? 'TWR' : msg.callsign}:
-                </span>
-                {msg.text}
-              </div>
-            </div>
+            <RadioMessageItem key={msg.id} msg={msg} />
           ))}
           <div ref={chatEndRef} />
         </div>
